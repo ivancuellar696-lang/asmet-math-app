@@ -5,39 +5,92 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:  # Permite ejecución manual desde la interfaz de GitHub
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    
     steps:
-    - uses: actions/checkout@v3
-
-    - name: Set up JDK 11
+    # 1. Descargar el código del repositorio
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    # 2. Configurar Java (necesario para Android)
+    - name: Setup Java JDK
       uses: actions/setup-java@v3
       with:
         java-version: '11'
         distribution: 'temurin'
-
+        
+    # 3. Configurar Android SDK
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
-
+      with:
+        api-level: 33
+        build-tools: 33.0.0
+        ndk: '25.1.8937393'
+        cmake: '3.22.1'
+        emulator: false
+        
+    # 4. Aceptar licencias de Android SDK
+    - name: Accept Android Licenses
+      run: |
+        yes | sdkmanager --licenses || true
+        
+    # 5. Instalar Cordova CLI
     - name: Install Cordova
       run: |
-        npm install -g cordova
+        npm install -g cordova@12.0.0
         cordova telemetry off
-
-    - name: Build APK
+        
+    # 6. Preparar el proyecto Cordova
+    - name: Setup Cordova Project
       run: |
-        cordova create asmet-build com.asmet.cbt "ASMET CBT ACADEMYC"
-        cd asmet-build
-        cordova platform add android
-        # Copiar los archivos de tu proyecto a la carpeta www de Cordova
+        # Crear un proyecto Cordova temporal
+        cordova create temp-app com.asmet.cbt.academyc "ASMET CBT ACADEMYC"
+        cd temp-app
+        
+        # Copiar tus archivos web a la carpeta www
         cp -r ../www/* www/
+        
+        # Si existe config.xml, copiarlo
+        if [ -f ../config.xml ]; then
+          cp ../config.xml .
+        fi
+        
+        # Agregar plataforma Android
+        cordova platform add android@12.0.0
+        
+    # 7. Construir APK en modo debug
+    - name: Build Debug APK
+      run: |
+        cd temp-app
+        cordova build android --debug
+        echo "✅ APK Debug construida"
+        
+    # 8. Construir APK en modo release
+    - name: Build Release APK
+      run: |
+        cd temp-app
         cordova build android --release
-
-    - name: Upload APK
-      uses: actions/upload-artifact@v3
+        echo "✅ APK Release construida"
+        
+    # 9. Subir las APKs generadas como artefactos
+    - name: Upload APK Artifacts
+      uses: actions/upload-artifact@v4
       with:
-        name: asmet-math-apk
-        path: asmet-build/platforms/android/app/build/outputs/apk/release/app-release-unsigned.apk
+        name: ASMET-CBT-APK-Files
+        path: |
+          temp-app/platforms/android/app/build/outputs/apk/debug/*.apk
+          temp-app/platforms/android/app/build/outputs/apk/release/*.apk
+        retention-days: 7
+        
+    # 10. (Opcional) Crear un release en GitHub si se hace tag
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          temp-app/platforms/android/app/build/outputs/apk/release/*.apk
+        generate_release_notes: true
