@@ -1,0 +1,158 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    # 1. Checkout code
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    # 2. Setup Java JDK 11 (requerido para Android)
+    - name: Setup Java JDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '11'
+        
+    # 3. Setup Android SDK (versión actualizada para 2026)
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        packages: |
+          platform-tools
+          platforms;android-34
+          build-tools;34.0.0
+          ndk;26.1.10909125
+          cmake;3.22.1
+        cmdline-tools-version: '11076708'
+        accept-android-sdk-licenses: true
+        
+    # 4. Setup Node.js (versión LTS estable)
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'  # Versión LTS para 2026
+        
+    # 5. Install Cordova y dependencias
+    - name: Install Cordova
+      run: |
+        npm install -g cordova@13.0.0
+        cordova --version
+        
+    # 6. Configurar variables de entorno Android
+    - name: Set Android environment variables
+      run: |
+        echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+        echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+        echo "PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH" >> $GITHUB_ENV
+        
+    # 7. Verificar estructura del proyecto
+    - name: Check project structure
+      run: |
+        echo "Contenido del directorio actual:"
+        ls -la
+        echo "Contenido de www (si existe):"
+        if [ -d "www" ]; then
+          ls -la www/
+        else
+          echo "⚠️ ADVERTENCIA: No existe directorio www/"
+          echo "Creando estructura básica..."
+          mkdir -p www
+          echo "<html><body><h1>App ASMET</h1></body></html>" > www/index.html
+        fi
+        
+    # 8. Crear config.xml si no existe
+    - name: Create config.xml if missing
+      run: |
+        if [ ! -f "config.xml" ]; then
+          echo "Creando config.xml..."
+          cat > config.xml << 'EOF'
+<?xml version='1.0' encoding='utf-8'?>
+<widget id="com.asmet.cbt.academyc" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0">
+    <name>ASMET CBT ACADEMYC</name>
+    <description>Plataforma de Matemáticas Adaptativa</description>
+    <author email="support@asmet.com" href="https://asmet.com">ASMET Team</author>
+    <content src="index.html" />
+    <access origin="*" />
+    
+    <!-- Preferencias Android -->
+    <preference name="Orientation" value="portrait" />
+    <preference name="Fullscreen" value="false" />
+    <preference name="AndroidWindowSplashScreenAnimatedIcon" value="res/screen/android/splash.png" />
+    <preference name="android-minSdkVersion" value="24" />
+    <preference name="android-targetSdkVersion" value="34" />
+    <preference name="android-compileSdkVersion" value="34" />
+    
+    <!-- Iconos (ejemplo) -->
+    <icon src="www/img/icon.png" />
+    
+    <!-- Permisos Android -->
+    <edit-config file="app/src/main/AndroidManifest.xml" mode="merge" target="/manifest/application">
+        <application android:usesCleartextTraffic="true" />
+    </edit-config>
+</widget>
+EOF
+        else
+          echo "✓ config.xml ya existe"
+        fi
+        
+    # 9. Crear proyecto Cordova y agregar plataforma Android
+    - name: Setup Cordova project
+      run: |
+        # Crear proyecto Cordova si no existe
+        if [ ! -d "platforms" ]; then
+          echo "Creando proyecto Cordova..."
+          cordova create . com.asmet.cbt.academyc "ASMET CBT ACADEMYC"
+        fi
+        
+        # Agregar plataforma Android
+        echo "Agregando plataforma Android..."
+        cordova platform add android@13.0.0
+        
+        # Verificar requisitos
+        echo "Verificando requisitos..."
+        cordova requirements android
+        
+    # 10. Construir APK
+    - name: Build APK
+      run: |
+        echo "Construyendo APK de debug..."
+        cordova build android --debug
+        
+        echo "Construyendo APK de release..."
+        # Para release necesitas un keystore (esto es opcional)
+        cordova build android --release -- --packageType=apk
+        
+    # 11. Mostrar APKs generados
+    - name: List APK files
+      run: |
+        echo "=== APKs generados ==="
+        find platforms/android/app/build/outputs/apk -name "*.apk" -type f | while read file; do
+          echo "📦 $(basename "$file") - $(du -h "$file" | cut -f1)"
+        done
+        
+    # 12. Subir APKs como artefactos
+    - name: Upload APK artifacts
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-apks
+        path: |
+          platforms/android/app/build/outputs/apk/**/*.apk
+        retention-days: 30
+        
+    # 13. Subir APK a GitHub Releases (opcional)
+    - name: Upload to GitHub Release
+      if: success() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: platforms/android/app/build/outputs/apk/release/*.apk  
